@@ -1,0 +1,11 @@
+{
+    "name": "playwright-automation",
+    "private": true,
+    "scripts": {
+        "test": "playwright test",
+        "runner": "node scripts/local-runner.mjs"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.50.0"
+    }
+}

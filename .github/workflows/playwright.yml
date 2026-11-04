@@ -1,0 +1,69 @@
+name: Playwright
+run-name: "Testrun ${{ inputs.run_id }}: ${{ inputs.module }}/${{ inputs.spec }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Testrun__c record id
+        required: true
+        type: string
+      module:
+        description: Module folder under tests/
+        required: true
+        type: string
+      spec:
+        description: Spec file name
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Inputs reach the shell only through env, never through ${{ }} in a script,
+    # so a crafted input cannot inject commands.
+    env:
+      RUN_ID: ${{ inputs.run_id }}
+      TEST_MODULE: ${{ inputs.module }}
+      TEST_SPEC: ${{ inputs.spec }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Mark run as In Progress
+        run: node scripts/report-to-salesforce.mjs start
+        env:
+          SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run spec
+        # A failing test must not stop the report step, which sets the final status.
+        continue-on-error: true
+        run: |
+          [[ "$TEST_MODULE" =~ ^[A-Za-z0-9_]+$ ]] || { echo "Invalid module name"; exit 1; }
+          [[ "$TEST_SPEC" =~ ^[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "Invalid spec name"; exit 1; }
+          npx playwright test "tests/$TEST_MODULE/$TEST_SPEC"
+
+      - name: Send results to Salesforce
+        if: always()
+        run: node scripts/report-to-salesforce.mjs finish
+        env:
+          SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
