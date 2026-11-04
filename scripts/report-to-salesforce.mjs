@@ -48,16 +48,14 @@ function createClient(sf) {
         },
         async uploadFile(runId, path) {
             const details = fileDetails(path);
-            const form = new FormData();
-            form.append(
-                'entity_content',
-                new Blob([JSON.stringify({ ...details, FirstPublishLocationId: runId })], { type: 'application/json' })
-            );
-            form.append('VersionData', new Blob([readFileSync(path)]), details.PathOnClient);
             const response = await fetch(`${sf.instanceUrl}/services/data/${API_VERSION}/sobjects/ContentVersion`, {
                 method: 'POST',
-                headers: { Authorization: `Bearer ${sf.token}` },
-                body: form
+                headers: { Authorization: `Bearer ${sf.token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ...details,
+                    FirstPublishLocationId: runId,
+                    VersionData: readFileSync(path).toString('base64')
+                })
             });
             if (!response.ok) {
                 throw new Error(`${details.PathOnClient} (${response.status}): ${await response.text()}`);
