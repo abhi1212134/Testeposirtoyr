@@ -44,13 +44,27 @@ jobs:
         env:
           SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
           SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
-          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+          SF_JWT_USERNAME: ${{ secrets.SF_JWT_USERNAME }}
+          SF_JWT_PRIVATE_KEY: ${{ secrets.SF_JWT_PRIVATE_KEY }}
+          SF_JWT_AUDIENCE: ${{ secrets.SF_JWT_AUDIENCE }}
 
       - name: Install dependencies
         run: npm ci
 
       - name: Install browser
         run: npx playwright install --with-deps chromium
+
+      # Runs after the installs, so package scripts never see the user's session.
+      # The private key stays in this step. The spec only gets the session.
+      - name: Sign in as the user who started the run
+        id: session
+        run: node scripts/report-to-salesforce.mjs session
+        env:
+          SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_JWT_USERNAME: ${{ secrets.SF_JWT_USERNAME }}
+          SF_JWT_PRIVATE_KEY: ${{ secrets.SF_JWT_PRIVATE_KEY }}
+          SF_JWT_AUDIENCE: ${{ secrets.SF_JWT_AUDIENCE }}
 
       - name: Run spec
         # A failing test must not stop the report step, which sets the final status.
@@ -61,9 +75,12 @@ jobs:
           npx playwright test "tests/$TEST_MODULE/$TEST_SPEC"
 
       - name: Send results to Salesforce
-        if: always()
+        # A failed sign-in has already saved its own, clearer error on the record.
+        if: always() && steps.session.outcome != 'failure'
         run: node scripts/report-to-salesforce.mjs finish
         env:
           SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
           SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
-          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+          SF_JWT_USERNAME: ${{ secrets.SF_JWT_USERNAME }}
+          SF_JWT_PRIVATE_KEY: ${{ secrets.SF_JWT_PRIVATE_KEY }}
+          SF_JWT_AUDIENCE: ${{ secrets.SF_JWT_AUDIENCE }}

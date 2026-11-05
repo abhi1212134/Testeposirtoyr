@@ -2,3 +2,5 @@ node_modules/
 test-results/
 results.json
 playwright-report/
+*.key
+*.pem

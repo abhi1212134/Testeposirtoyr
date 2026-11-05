@@ -96,6 +96,11 @@ export async function finishRun(client, runId, extraFields = {}) {
             .join('\n\n')
             .slice(0, MAX_ERROR_LENGTH);
     }
+    // A spec could print its session token, and error messages are saved on the record.
+    const token = process.env.SF_TEST_ACCESS_TOKEN;
+    if (token && outcome.Error_Message__c) {
+        outcome.Error_Message__c = outcome.Error_Message__c.replaceAll(token, '[redacted]');
+    }
     await client.updateRun(runId, { ...outcome, ...extraFields });
     console.log(`Run ${runId}: ${outcome.Status__c}`);
 }

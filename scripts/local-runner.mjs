@@ -1,11 +1,11 @@
 // Runs specs on this machine for the Playwright Runner tab, without GitHub.
-// Watches the org for Queued runs started with Run locally, runs each spec, and writes back the status and files.
+// Watches the org for your Queued runs started with Run locally, runs each spec, and writes back the status and files.
 //
 //   npm run runner                 keep running until Ctrl+C
 //   npm run runner -- --headed     also show the browser while tests run
 //
-// It signs in through your existing Salesforce CLI login. Set SF_ORG to use an org
-// other than the default below.
+// It signs in through your existing Salesforce CLI login, and it only takes runs started
+// by that user. Set SF_ORG to use an org other than the default below.
 import { spawnSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -18,17 +18,45 @@ const API = '/services/data/v62.0';
 const POLL_MS = 5000;
 const SINGLE_RUNNER_PORT = 47813;
 const PROJECT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
-const QUEUED_RUNS_QUERY = encodeURIComponent(
-    "SELECT Id, Module__c, Spec__c FROM Testrun__c WHERE Status__c = 'Queued' AND Run_Target__c = 'Local' ORDER BY CreatedDate"
-);
 
 if (!/^[\w.@-]+$/.test(ORG)) {
     console.error('SF_ORG is not a valid org alias or username');
     process.exit(1);
 }
 
-// The command is built only from this script's constants, the checked org name and
-// ids returned by Salesforce. Request bodies go through stdin.
+function queuedRunsQuery(username) {
+    const safeUsername = username.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return encodeURIComponent(
+        'SELECT Id, Module__c, Spec__c FROM Testrun__c ' +
+            `WHERE Status__c = 'Queued' AND Run_Target__c = 'Local' AND CreatedBy.Username = '${safeUsername}' ` +
+            'ORDER BY CreatedDate'
+    );
+}
+
+// Reads the session from the CLI. The output holds an access token, so it never goes into an error or log.
+function readCliLogin() {
+    const env = { ...process.env, NO_COLOR: '1' };
+    delete env.FORCE_COLOR;
+    const result = spawnSync(`sf org display --json --target-org ${ORG}`, {
+        shell: true,
+        env,
+        encoding: 'utf8',
+        maxBuffer: 16 * 1024 * 1024
+    });
+    let login;
+    try {
+        login = JSON.parse(result.stdout).result;
+    } catch {
+        login = undefined;
+    }
+    if (result.status !== 0 || !login?.username || !login?.accessToken || !login?.instanceUrl) {
+        throw new Error(`Could not read your Salesforce CLI login. Run: sf org login web --alias ${ORG}`);
+    }
+    return login;
+}
+
+// The command is built only from this script's constants, the checked org name, ids
+// returned by Salesforce and a percent-encoded query. Request bodies go through stdin.
 function sfRest(method, path, body) {
     const bodyArgument = body === undefined ? '' : '--body -';
     const env = { ...process.env, NO_COLOR: '1' };
@@ -83,6 +111,11 @@ async function processRun(run) {
             throw new Error(`Invalid module or spec name: ${run.Module__c}/${run.Spec__c}`);
         }
         client.updateRun(run.Id, { Status__c: 'In Progress' });
+        // Read for each run, because the session can expire while the runner waits.
+        // Playwright inherits these, and finishRun uses the token to redact error messages.
+        const login = readCliLogin();
+        process.env.SF_TEST_INSTANCE_URL = login.instanceUrl;
+        process.env.SF_TEST_ACCESS_TOKEN = login.accessToken;
         runPlaywright(run);
         await finishRun(client, run.Id);
     } catch (error) {
@@ -110,10 +143,17 @@ async function main() {
         console.error('A local runner is already running. Stop it with Ctrl+C before starting another.');
         process.exit(1);
     }
-    console.log(`Local runner watching org "${ORG}". Press Ctrl+C to stop.`);
+    let query;
+    try {
+        query = queuedRunsQuery(readCliLogin().username);
+    } catch (error) {
+        console.error(error.message);
+        process.exit(1);
+    }
+    console.log(`Local runner watching your runs in org "${ORG}". Press Ctrl+C to stop.`);
     for (;;) {
         try {
-            const { records } = sfRest('GET', `${API}/query?q=${QUEUED_RUNS_QUERY}`);
+            const { records } = sfRest('GET', `${API}/query?q=${query}`);
             for (const run of records) await processRun(run);
         } catch (error) {
             // Keep going: a network problem shouldn't stop the runner.
