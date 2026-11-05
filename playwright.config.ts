@@ -9,7 +9,8 @@ export default defineConfig({
     reporter: [['list'], ['json', { outputFile: 'results.json' }]],
     use: {
         screenshot: 'on',
-        video: 'on',
+        // Each run's files count against the org's file storage, so only failures keep a video.
+        video: 'retain-on-failure',
         trace: 'off'
     },
     projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }]

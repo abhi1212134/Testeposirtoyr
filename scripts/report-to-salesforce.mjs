@@ -84,6 +84,7 @@ async function startUserSession(client, runId) {
     } catch (error) {
         await client.updateRun(runId, {
             Status__c: 'Failed',
+            Finished_At__c: new Date().toISOString(),
             Run_URL__c: process.env.RUN_URL,
             Error_Message__c:
                 'Could not sign in as the user who started this run. Check that they have the ' +
@@ -100,7 +101,11 @@ async function main() {
 
     const client = createClient(await authenticate());
     if (step === 'start') {
-        await client.updateRun(runId, { Status__c: 'In Progress', Run_URL__c: process.env.RUN_URL });
+        await client.updateRun(runId, {
+            Status__c: 'In Progress',
+            Started_At__c: new Date().toISOString(),
+            Run_URL__c: process.env.RUN_URL
+        });
     } else if (step === 'session') {
         await startUserSession(client, runId);
     } else if (step === 'finish') {
@@ -113,5 +118,9 @@ async function main() {
 // Sets exitCode rather than calling exit, so pending output such as a mask command is written first.
 main().catch((error) => {
     console.error(error.message);
+    // Shows the reason on the run's summary page, without opening the step's log.
+    if (process.env.GITHUB_ACTIONS) {
+        console.log(`::error::${error.message.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')}`);
+    }
     process.exitCode = 1;
 });

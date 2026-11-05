@@ -26,9 +26,11 @@ Complete the setup below, then click **Run on GitHub**. Until then, those runs f
 1. The tab creates a `Testrun__c` record and starts `.github/workflows/playwright.yml`.
 2. The workflow signs in as a service user and marks the run In Progress.
 3. It signs in again as the user who started the run, and gives the spec that session.
-4. It runs `tests/<module>/<spec>` and records a screenshot and video.
+4. It runs `tests/<module>/<spec>` and records a screenshot, plus a video if the test fails.
 5. `scripts/report-to-salesforce.mjs` attaches those files to the record, as the service user, and sets the final status.
 6. The tab polls the record every 4 seconds and shows the result.
+
+A failed test also shows as failed on GitHub. If a sign-in fails, the reason appears as an error on the run's summary page. When the tab opens, it marks a GitHub run as failed if there's no result after 30 minutes. It does the same for a local run that started more than 30 minutes ago.
 
 ## Setup
 
@@ -74,13 +76,15 @@ In the repository, open **Settings > Secrets and variables > Actions** and add:
 
 To test the org as the user who started the run, call `openOrgAsRunUser(page)` from `tests/support/salesforce.ts`. See `tests/Testingdata/org-login.spec.ts`. The spec sees what that user can see, and can change what they can change. Its screenshots and videos are attached to the run, where anyone who can open the record can view them.
 
-## Run locally
+## Run from the command line
 
 ```
 npm ci
 npx playwright install chromium
 npx playwright test tests/Testingdata/login.spec.ts
 ```
+
+`npm test` runs every spec except those tagged `@demo`, which fail on purpose, and `@org`, which need a session from the Playwright Runner tab.
 
 ## Public repository warning
 

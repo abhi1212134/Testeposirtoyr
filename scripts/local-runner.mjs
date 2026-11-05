@@ -15,7 +15,9 @@ import { fileDetails, finishRun, OUTPUT_DIR, RESULTS_FILE } from './results.mjs'
 
 const ORG = process.env.SF_ORG || 'testproject';
 const API = '/services/data/v62.0';
-const POLL_MS = 5000;
+// Each check is an API call, and a Developer Edition org allows 15,000 a day.
+// This leaves plenty for everything else if the runner stays on all day.
+const POLL_MS = 15000;
 const SINGLE_RUNNER_PORT = 47813;
 const PROJECT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -24,17 +26,17 @@ if (!/^[\w.@-]+$/.test(ORG)) {
     process.exit(1);
 }
 
-function queuedRunsQuery(username) {
+function myLocalRunsQuery(status, username) {
     const safeUsername = username.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     return encodeURIComponent(
         'SELECT Id, Module__c, Spec__c FROM Testrun__c ' +
-            `WHERE Status__c = 'Queued' AND Run_Target__c = 'Local' AND CreatedBy.Username = '${safeUsername}' ` +
+            `WHERE Status__c = '${status}' AND Run_Target__c = 'Local' AND CreatedBy.Username = '${safeUsername}' ` +
             'ORDER BY CreatedDate'
     );
 }
 
-// Reads the session from the CLI. The output holds an access token, so it never goes into an error or log.
-function readCliLogin() {
+// Finds which user the CLI is signed in as.
+function readCliUsername() {
     const env = { ...process.env, NO_COLOR: '1' };
     delete env.FORCE_COLOR;
     const result = spawnSync(`sf org display --json --target-org ${ORG}`, {
@@ -43,16 +45,16 @@ function readCliLogin() {
         encoding: 'utf8',
         maxBuffer: 16 * 1024 * 1024
     });
-    let login;
+    let username;
     try {
-        login = JSON.parse(result.stdout).result;
+        username = JSON.parse(result.stdout).result.username;
     } catch {
-        login = undefined;
+        username = undefined;
     }
-    if (result.status !== 0 || !login?.username || !login?.accessToken || !login?.instanceUrl) {
+    if (result.status !== 0 || !username) {
         throw new Error(`Could not read your Salesforce CLI login. Run: sf org login web --alias ${ORG}`);
     }
-    return login;
+    return username;
 }
 
 // The command is built only from this script's constants, the checked org name, ids
@@ -100,7 +102,8 @@ function runPlaywright(run) {
     spawnSync(
         process.execPath,
         ['node_modules/@playwright/test/cli.js', 'test', `tests/${run.Module__c}/${run.Spec__c}`, ...headed],
-        { cwd: PROJECT_DIR, stdio: 'inherit' }
+        // Specs get login links through the CLI, so they never handle an access token.
+        { cwd: PROJECT_DIR, stdio: 'inherit', env: { ...process.env, SF_TEST_ORG: ORG } }
     );
 }
 
@@ -110,17 +113,30 @@ async function processRun(run) {
         if (!/^\w+$/.test(run.Module__c ?? '') || !/^[\w.-]+\.spec\.ts$/.test(run.Spec__c ?? '')) {
             throw new Error(`Invalid module or spec name: ${run.Module__c}/${run.Spec__c}`);
         }
-        client.updateRun(run.Id, { Status__c: 'In Progress' });
-        // Read for each run, because the session can expire while the runner waits.
-        // Playwright inherits these, and finishRun uses the token to redact error messages.
-        const login = readCliLogin();
-        process.env.SF_TEST_INSTANCE_URL = login.instanceUrl;
-        process.env.SF_TEST_ACCESS_TOKEN = login.accessToken;
+        client.updateRun(run.Id, { Status__c: 'In Progress', Started_At__c: new Date().toISOString() });
         runPlaywright(run);
         await finishRun(client, run.Id);
     } catch (error) {
         console.error(error.message);
-        client.updateRun(run.Id, { Status__c: 'Failed', Error_Message__c: error.message.slice(0, 30000) });
+        client.updateRun(run.Id, {
+            Status__c: 'Failed',
+            Finished_At__c: new Date().toISOString(),
+            Error_Message__c: error.message.slice(0, 30000)
+        });
+    }
+}
+
+// If the runner stopped during a test, that run would otherwise stay In Progress.
+// Only one runner can be on this machine, so nothing here is still running it.
+function failInterruptedRuns(username) {
+    const { records } = sfRest('GET', `${API}/query?q=${myLocalRunsQuery('In Progress', username)}`);
+    for (const run of records) {
+        client.updateRun(run.Id, {
+            Status__c: 'Failed',
+            Finished_At__c: new Date().toISOString(),
+            Error_Message__c: 'The local runner stopped before this run finished.'
+        });
+        console.log(`Marked interrupted run ${run.Id} as Failed.`);
     }
 }
 
@@ -143,13 +159,20 @@ async function main() {
         console.error('A local runner is already running. Stop it with Ctrl+C before starting another.');
         process.exit(1);
     }
-    let query;
+    let username;
     try {
-        query = queuedRunsQuery(readCliLogin().username);
+        username = readCliUsername();
     } catch (error) {
         console.error(error.message);
         process.exit(1);
     }
+    try {
+        failInterruptedRuns(username);
+    } catch (error) {
+        // Not worth stopping for: the tab also fails these runs after 30 minutes.
+        console.error(error.message);
+    }
+    const query = myLocalRunsQuery('Queued', username);
     console.log(`Local runner watching your runs in org "${ORG}". Press Ctrl+C to stop.`);
     for (;;) {
         try {

@@ -62,7 +62,9 @@ function summarise(resultsPath) {
     const failures = collectFailures(report);
     const globalErrors = (report.errors ?? []).map((e) => stripAnsi(e.message));
 
-    if (failures.length === 0 && globalErrors.length === 0 && (report.stats?.expected ?? 0) > 0) {
+    // A flaky test failed, then passed on a retry, so it counts as having run and passed.
+    const passedCount = (report.stats?.expected ?? 0) + (report.stats?.flaky ?? 0);
+    if (failures.length === 0 && globalErrors.length === 0 && passedCount > 0) {
         return { Status__c: 'Passed', Failure_Location__c: null, Error_Message__c: null };
     }
     const messages = [
@@ -101,6 +103,6 @@ export async function finishRun(client, runId, extraFields = {}) {
     if (token && outcome.Error_Message__c) {
         outcome.Error_Message__c = outcome.Error_Message__c.replaceAll(token, '[redacted]');
     }
-    await client.updateRun(runId, { ...outcome, ...extraFields });
+    await client.updateRun(runId, { ...outcome, Finished_At__c: new Date().toISOString(), ...extraFields });
     console.log(`Run ${runId}: ${outcome.Status__c}`);
 }

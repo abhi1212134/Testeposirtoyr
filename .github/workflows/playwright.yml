@@ -67,14 +67,13 @@ jobs:
           SF_JWT_AUDIENCE: ${{ secrets.SF_JWT_AUDIENCE }}
 
       - name: Run spec
-        # A failing test must not stop the report step, which sets the final status.
-        continue-on-error: true
         run: |
           [[ "$TEST_MODULE" =~ ^[A-Za-z0-9_]+$ ]] || { echo "Invalid module name"; exit 1; }
           [[ "$TEST_SPEC" =~ ^[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "Invalid spec name"; exit 1; }
           npx playwright test "tests/$TEST_MODULE/$TEST_SPEC"
 
       - name: Send results to Salesforce
+        # Runs after a failed test too, because it sets the final status, and the job still shows as failed.
         # A failed sign-in has already saved its own, clearer error on the record.
         if: always() && steps.session.outcome != 'failure'
         run: node scripts/report-to-salesforce.mjs finish

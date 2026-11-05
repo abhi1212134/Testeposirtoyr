@@ -2,7 +2,7 @@
     "name": "playwright-automation",
     "private": true,
     "scripts": {
-        "test": "playwright test",
+        "test": "playwright test --grep-invert \"@demo|@org\"",
         "runner": "node scripts/local-runner.mjs"
     },
     "devDependencies": {
